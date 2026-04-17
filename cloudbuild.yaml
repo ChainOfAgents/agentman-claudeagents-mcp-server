@@ -1,0 +1,93 @@
+# Cloud Build configuration for MCP Server (TypeScript/Node.js)
+# Deploys to the dedicated MCP servers project (agentman-public-mcp-servers)
+# Following the Agentman MCP deployment pattern
+#
+# Usage:
+#   gcloud builds submit --config=cloudbuild.yaml \
+#     --substitutions=_SERVICE_NAME=your-service-name,SHORT_SHA=$(git rev-parse --short HEAD)
+
+steps:
+  # Build MCP server image
+  - name: "gcr.io/cloud-builders/docker"
+    id: "build-server"
+    args:
+      - "build"
+      - "-f"
+      - "Dockerfile"
+      - "-t"
+      - "${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_SERVICE_NAME}:$SHORT_SHA"
+      - "-t"
+      - "${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_SERVICE_NAME}:latest"
+      - "."
+
+  # Push image to Artifact Registry (SHA tag)
+  - name: "gcr.io/cloud-builders/docker"
+    id: "push-server-sha"
+    args:
+      - "push"
+      - "${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_SERVICE_NAME}:$SHORT_SHA"
+    waitFor: ["build-server"]
+
+  # Push image to Artifact Registry (latest tag)
+  - name: "gcr.io/cloud-builders/docker"
+    id: "push-server-latest"
+    args:
+      - "push"
+      - "${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_SERVICE_NAME}:latest"
+    waitFor: ["build-server"]
+
+  # Deploy to Cloud Run
+  - name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
+    id: "deploy-server"
+    entrypoint: "gcloud"
+    args:
+      - "run"
+      - "deploy"
+      - "${_SERVICE_NAME}"
+      - "--image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_SERVICE_NAME}:$SHORT_SHA"
+      - "--region=${_REGION}"
+      - "--platform=managed"
+      - "--allow-unauthenticated"
+      - "--ingress=all"
+      - "--service-account=${_SERVICE_ACCOUNT}@$PROJECT_ID.iam.gserviceaccount.com"
+      - "--port=8010"
+      - "--memory=512Mi"
+      - "--cpu=1"
+      - "--min-instances=1"
+      - "--max-instances=10"
+      - "--timeout=1800s"
+      - "--concurrency=80"
+      - "--no-cpu-throttling"
+      - "--set-env-vars=NODE_ENV=${_NODE_ENV},LOG_LEVEL=${_LOG_LEVEL},HOST=0.0.0.0,MCP_TRANSPORT=http,MCP_SERVER_NAME=${_MCP_SERVER_NAME},OAUTH_SERVER_ENABLED=true,OAUTH_ISSUER=${_OAUTH_ISSUER},OAUTH_AUTHORIZATION_ENDPOINT=${_OAUTH_AUTHORIZATION_URL},OAUTH_TOKEN_ENDPOINT=${_OAUTH_TOKEN_URL},OAUTH_SCOPES=${_OAUTH_SCOPES},SAAS_API_BASE_URL=${_SAAS_API_BASE_URL},ANTHROPIC_VERSION=${_ANTHROPIC_VERSION},ANTHROPIC_BETA=${_ANTHROPIC_BETA},MCP_SERVER_URL=${_MCP_SERVER_URL},UPSTREAM_CLIENT_ID=apikey-flow,UPSTREAM_CLIENT_SECRET=apikey-flow,UPSTREAM_AUTH_URL=https://not-used.example.com/auth,UPSTREAM_TOKEN_URL=https://not-used.example.com/token"
+    waitFor: ["push-server-sha", "push-server-latest"]
+
+# Substitutions (override in deploy scripts)
+substitutions:
+  _REGION: "us-west2"
+  _REPO: "mcp-servers"
+  _SERVICE_NAME: "claudeagents-server"
+  _SERVICE_ACCOUNT: "mcp-deployer"
+  _MCP_SERVER_NAME: "claudeagents_mcp"
+  _NODE_ENV: "production"
+  _LOG_LEVEL: "info"
+  _OAUTH_ISSUER: ""
+  _OAUTH_AUTHORIZATION_URL: ""
+  _OAUTH_TOKEN_URL: ""
+  _OAUTH_SCOPES: ""
+  _SAAS_API_BASE_URL: "https://api.anthropic.com"
+  _ANTHROPIC_VERSION: "2023-06-01"
+  _ANTHROPIC_BETA: "managed-agents-2026-04-01"
+  _MCP_SERVER_URL: "https://mcp.agentman.ai/claudeagents"
+
+# Build options
+options:
+  logging: CLOUD_LOGGING_ONLY
+  machineType: "E2_MEDIUM"
+
+# Build timeout
+timeout: "1200s"
+
+# Images to push to Artifact Registry
+images:
+  - "${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_SERVICE_NAME}:$SHORT_SHA"
+  - "${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_SERVICE_NAME}:latest"

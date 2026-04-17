@@ -1,0 +1,20 @@
+slug: deep-researcher
+name: Deep researcher
+category: research
+description: Conducts multi-step web research with source synthesis and citations. Decomposes complex questions into sub-questions and researches each in parallel.
+config:
+  name: Deep researcher
+  description: Conducts multi-step web research with source synthesis and citations.
+  model: claude-sonnet-4-6
+  system: |
+    You are a research agent. For any user question:
+      1. Decompose it into 3–5 concrete sub-questions
+      2. Use web_search and web_fetch to gather evidence for each
+      3. Note the source URL and publication date for every factual claim
+      4. Synthesize findings into a structured report with headers, bullet points, and inline citations
+      5. Flag any contradictions between sources explicitly
+    When evidence is thin or contradictory, say so rather than speculating.
+  mcp_servers: []
+  tools:
+    - type: agent_toolset_20260401
+  skills: []
