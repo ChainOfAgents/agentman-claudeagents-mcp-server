@@ -1,207 +1,172 @@
-# MCP Server Template
+# CLAUDE.md
 
-This is a production-ready template for building MCP (Model Context Protocol) servers that integrate with SaaS APIs like Gmail, Google Calendar, Shopify, QuickBooks, etc.
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Quick Start
+## Project Overview
+
+MCP server for Claude Managed Agents — gives any MCP client (claude.ai, Claude Desktop, Cursor, Claude Code) a promptable interface to the Anthropic Managed Agents API. 34 tools covering the full agent lifecycle: create agents, configure environments, start sessions, send messages, retrieve results.
+
+**Live at:** `mcp.agentman.ai/claudeagents/mcp`
+**Repo:** `github.com/ChainOfAgents/agentman-claudeagents-mcp-server`
+**Built from:** `agentman-mcp-server-template`
+
+## Build & Run
 
 ```bash
-# Install dependencies
 npm install
-
-# Development (stdio transport)
-npm run dev
-
-# Production build
-npm run build
-
-# HTTP server mode
-MCP_TRANSPORT=http npm run start
+npm run build              # TypeScript compile (tsc)
+npm run dev                # Start stdio MCP server (for Claude Desktop / Cursor)
+MCP_TRANSPORT=http npm run dev:http   # Start HTTP server (for claude.ai / Cloud Run)
+npm run typecheck          # Type-check without emitting
+npm run lint               # ESLint
 ```
 
-## Project Structure
+**Prerequisites:** Node >= 20. For local testing, set `ANTHROPIC_API_KEY` in `.env` (copy from `.env.example`).
 
+## Architecture
+
+This is a TypeScript MCP server built from `agentman-mcp-server-template`. Two transports:
+
+- **stdio** (`src/index.ts`) — for local MCP clients. API key from `ANTHROPIC_API_KEY` env var.
+- **HTTP** (`src/http-server.ts`) — for remote clients and claude.ai. API key comes as Bearer token via OAuth flow.
+
+### Key Directories
+
+- `src/tools/claudeagents/` — the 34 MCP tool implementations, organized by category:
+  - `templates.ts` — `claudeagent_list_templates`, `claudeagent_get_template` (bundled YAML templates)
+  - `agents.ts` — agent CRUD (list, get, versions, create, update, archive)
+  - `environments.ts` — environment CRUD (list, get, create, update, archive, delete)
+  - `sessions.ts` — session CRUD (list, get, create, update, archive, delete)
+  - `session-events.ts` — send_user_message, define_outcome, interrupt, confirm_tool_use, respond_custom_tool
+  - `observation.ts` — list_session_events (with type/exclude_type filtering), list_threads, get_thread_events
+  - `streaming.ts` — wait_for_session_idle, stream_session_events (MCP progress notifications via SSE)
+  - `smart.ts` — summarize_session (with cost/cache/derived metrics), get_session_output (80K pagination), find_anomalies, run_task (async default)
+- `src/tools/shared.ts` — `registerTool` wrapper, `sendProgress` helper, `createSuccessResponse`, `createErrorResponse`, `requireAuth`
+- `src/tools/index.ts` — wires up all 34 tools via category registration functions
+- `src/schemas/claudeagents.ts` — Zod schemas for Anthropic API fields (agent IDs, session IDs, pagination, etc.)
+- `src/types/anthropic.ts` — TypeScript interfaces for Anthropic Managed Agents API responses
+- `src/services/api-client.ts` — HTTP client with Anthropic headers (`x-api-key`, `anthropic-version`, `anthropic-beta`), SSE streaming via `apiStream()` async generator
+- `src/services/templates.ts` — YAML template loader (reads `src/templates/*.yaml` at startup)
+- `src/templates/` — 10 bundled agent config templates (deep-researcher, support-agent, data-analyst, etc.)
+- `src/auth/oauth-server.ts` — OAuth broker with custom API-key-paste flow for claude.ai
+- `src/config.ts` — env var loading with Zod validation, Anthropic-specific config
+
+## Key Patterns
+
+### Tool naming: `claudeagent_{verb}_{noun}`
+
+All tools follow `claudeagent_*` prefix in snake_case. Verbs: list, get, create, update, archive, delete, send, wait_for, stream, summarize, find, run.
+
+### Async-first for agent execution
+
+`claudeagent_run_task` defaults to `wait=false` — creates session, sends message, returns immediately with `session_id`. Caller polls with `claudeagent_get_session` until status is "idle", then retrieves output with `claudeagent_get_session_output`.
+
+`wait=true` blocks and streams SSE progress notifications — only for stdio mode where long-lived connections are fine.
+
+### Anthropic API authentication
+
+- **Stdio mode:** `ANTHROPIC_API_KEY` from env var, static for the process lifetime
+- **HTTP mode:** Bearer token extracted from each request's `Authorization` header. In hosted mode, this token is the user's Anthropic API key, obtained via the OAuth API-key-paste flow.
+
+The API client attaches three headers to every Anthropic request:
+- `x-api-key: <key>` (NOT `Authorization: Bearer`)
+- `anthropic-version: 2023-06-01`
+- `anthropic-beta: managed-agents-2026-04-01`
+
+### Anthropic API quirks
+
+- **Date filters use bracket notation:** `created_at[gte]` and `created_at[lte]`, not `created_after`/`created_before`. Our tool schemas accept `created_after`/`created_before` and translate them in the handler.
+- **SSE events all use `event: message`:** the real event type is inside the `data` JSON payload's `type` field, not in the SSE `event` field. The streaming code resolves this.
+- **Session usage fields are zero during "running" status** and only populate on "idle". Documented in `get_session` description.
+- **RFC 8414 `.well-known` path with path suffix:** OAuth discovery at `/.well-known/oauth-authorization-server/{path_prefix}`, not `/{path_prefix}/.well-known/oauth-authorization-server`. Both paths are mapped in the URL map.
+
+### Response formatting
+
+- All tools accept `response_format: 'markdown' | 'json'` (default: markdown)
+- Responses go through `createSuccessResponse` which truncates at 25K chars via `formatResponse`
+- Exception: `get_session_output` bypasses truncation and returns up to 80K chars directly as MCP content, with `offset` pagination for longer outputs
+
+### Streaming and progress notifications
+
+Three tools emit MCP `notifications/progress` messages during execution:
+- `run_task` (when `wait=true`), `wait_for_session_idle`, `stream_session_events`
+- They open an SSE stream to Anthropic's `/v1/sessions/{id}/events/stream` and translate each event to a human-readable progress message
+- `sendProgress(extra, progress, message)` in `shared.ts` handles the MCP protocol — reads `extra._meta?.progressToken` and emits via `extra.sendNotification()`
+- Abort handling: when breaking out of the SSE loop, the AbortController is explicitly aborted to prevent stale `reader.read()` throws
+
+### Cost estimation
+
+`summarize_session` includes:
+- **Raw token counts** from the session's `usage` field (input, output, cache_write, cache_read)
+- **Cost estimate** using published Anthropic pricing (Sonnet/Opus/Haiku per-million-token rates)
+- **Derived metrics:** cache_hit_rate, cost_per_search, cost_per_1k_output_tokens, cache_write_to_read_ratio
+
+Pricing constants are in `MODEL_PRICING` inside `smart.ts`.
+
+### OAuth broker for claude.ai
+
+claude.ai requires OAuth discovery (RFC 8414 / RFC 9728) before authenticating MCP requests. Our flow:
+1. Server returns 401 with `WWW-Authenticate: Bearer resource_metadata="..."` header
+2. claude.ai discovers OAuth endpoints via `.well-known`
+3. claude.ai registers a client via `POST /oauth/register`
+4. claude.ai redirects user to `GET /oauth/authorize` → our server shows an HTML form: "Paste your Anthropic API key"
+5. User pastes key, POST to `/oauth/callback-apikey` → server issues auth code wrapping the key
+6. claude.ai exchanges code for token → receives the API key as the access token
+7. All subsequent MCP requests include `Authorization: Bearer <api-key>`
+
+Custom code in `oauth-server.ts`: the `POST /oauth/callback-apikey` handler and the modified authorize endpoint that shows the HTML form instead of redirecting to an upstream OAuth provider.
+
+## Deployment
+
+Deployed to Google Cloud Run behind `mcp.agentman.ai` load balancer.
+
+```bash
+./deploy-prod.sh    # Builds, pushes, deploys, updates URL map
 ```
-src/
-├── index.ts           # Entry point with transport switching
-├── http-server.ts     # HTTP transport (production)
-├── config.ts          # Environment configuration
-├── auth/              # OAuth metadata endpoints
-├── services/          # API client for SaaS integration
-├── tools/             # MCP tool definitions and handlers
-└── utils/             # Logger, response formatting, pagination
-```
 
-## Building New MCP Servers
+**GCP Project:** `agentman-public-mcp-servers`
+**Region:** `us-west2`
+**Service:** `claudeagents-server`
+**URL map:** `mcp-url-map` (shared across all Agentman MCP servers)
+**Path prefix:** `/claudeagents`
+**Cloud Run timeout:** 1800s (30 min, for streaming tools)
 
-When creating a new MCP server from this template:
+URL map routes (all rewrite to strip prefix):
+- `/claudeagents/mcp` → `/mcp`
+- `/claudeagents/health` → `/health`
+- `/claudeagents/oauth/*` → `/oauth/*`
+- `/claudeagents/.well-known/*` → `/.well-known/*`
+- `/.well-known/oauth-authorization-server/claudeagents` → `/.well-known/oauth-authorization-server` (RFC 8414 path)
+- `/.well-known/oauth-protected-resource/claudeagents` → `/.well-known/oauth-protected-resource`
 
-1. **Clone the template** and rename for your SaaS integration
-2. **Use the `mcp-builder` skill** to guide implementation
-
-### Using the mcp-builder Skill
-
-The `mcp-builder` skill provides comprehensive guidance for creating high-quality MCP servers. To use it:
-
-1. **Enable the Agentman Skills MCP server** in Claude Code:
-   ```bash
-   claude mcp add skills-agentman-ai https://skills.agentman.ai/mcp --transport http
-   ```
-
-2. **Invoke the skill** when building your MCP server:
-   ```
-   Use the mcp-builder skill to help me create tools for [Gmail/Shopify/etc]
-   ```
-
-The skill includes:
-- MCP 2025-11-25 best practices
-- Tool naming conventions (snake_case with service prefix)
-- Tool description structure (Args/Returns/Examples/Error Handling)
-- Response formatting (markdown/json with `response_format` parameter)
-- Pagination patterns
-- TypeScript implementation patterns
-
-## Key Files to Modify
-
-When customizing for your SaaS:
-
-1. **`src/tools/index.ts`** - Define your tools here
-   - Add tool definitions with descriptions, annotations, input/output schemas
-   - Implement tool handlers with API calls
-   - Use Zod for input validation
-
-2. **`src/services/api-client.ts`** - API client is ready to use
-   - Set `SAAS_API_BASE_URL` for your API
-   - Token is passed from Claude/Agentman via Authorization header
-
-3. **`src/config.ts`** - Update server name and OAuth settings
-   - `MCP_SERVER_NAME` - Your server name
-   - `OAUTH_ISSUER`, `OAUTH_AUTHORIZATION_URL`, etc.
-   - For broker mode: `UPSTREAM_CLIENT_ID`, `UPSTREAM_AUTH_URL`, etc.
-
-4. **`src/auth/oauth-metadata.ts`** - OAuth scopes for your SaaS
-
-5. **`src/auth/oauth-server.ts`** - OAuth broker customization (if using broker mode)
-   - Customize the upstream authorization URL construction in `/oauth/authorize`
-   - Customize the token exchange body in `/oauth/callback`
-   - Add provider-specific params (e.g., `access_type=offline` for Google)
+**Known deploy issue:** the deploy script's URL map import sometimes fails with "Conflicting services for the same path pattern" on repeat deploys because rules already exist. The map is correct — the import step just can't handle idempotent re-adds. Manually export/clean/reimport if needed.
 
 ## Environment Variables
 
-```bash
-# Required for HTTP mode
-PORT=8080
-MCP_TRANSPORT=http
+See `.env.example`. Key vars:
 
-# OAuth configuration (for well-known endpoints - passthrough mode)
-OAUTH_ISSUER=https://your-oauth-provider.com
-OAUTH_AUTHORIZATION_URL=https://your-oauth-provider.com/authorize
-OAUTH_TOKEN_URL=https://your-oauth-provider.com/token
-OAUTH_SCOPES=scope1 scope2
+| Variable | Default | Purpose |
+|---|---|---|
+| `ANTHROPIC_API_KEY` | — | Required in stdio mode. Not used in HTTP mode (comes from Bearer header). |
+| `SAAS_API_BASE_URL` | `https://api.anthropic.com` | Anthropic API base URL |
+| `ANTHROPIC_VERSION` | `2023-06-01` | Anthropic API version header |
+| `ANTHROPIC_BETA` | `managed-agents-2026-04-01` | Anthropic beta header |
+| `API_TIMEOUT_MS` | `1800000` | Long timeout for streaming tools (30 min) |
+| `API_FAST_TIMEOUT_MS` | `30000` | Fast timeout for CRUD tools (30 sec) |
+| `MCP_SERVER_NAME` | `claudeagents_mcp` | Advertised server name |
+| `OAUTH_SERVER_ENABLED` | `true` (in prod) | Enable OAuth broker for claude.ai |
 
-# SaaS API
-SAAS_API_BASE_URL=https://api.your-saas.com
+## TypeScript Config
 
-# For local development (stdio mode)
-SAAS_ACCESS_TOKEN=your-dev-token
-```
+- ESM modules (`"type": "module"` in package.json, `"module": "ESNext"` in tsconfig)
+- All imports use `.js` extensions
+- Templates are YAML files in `src/templates/` — not compiled by tsc, copied to Docker image separately in the Dockerfile
 
-### OAuth Broker Mode
+## Context: Agentwatch
 
-To enable the server as its own OAuth authorization server:
+This server is **Layer 1** of the Agentwatch product architecture:
+- **Layer 1 (this repo):** Provider MCP servers — Agentman-branded free OSS tools wrapping agent runtime APIs
+- **Layer 2:** Agentwatch runtime + MCP server at `mcp.agentwatch.com/mcp` — hosted commercial product
+- **Layer 3:** Agentwatch UI at `agentwatch.com` — NBA-first Briefing Room
 
-```bash
-OAUTH_SERVER_ENABLED=true
-UPSTREAM_CLIENT_ID=your-saas-oauth-client-id
-UPSTREAM_CLIENT_SECRET=your-saas-oauth-client-secret
-UPSTREAM_AUTH_URL=https://accounts.google.com/o/oauth2/v2/auth
-UPSTREAM_TOKEN_URL=https://oauth2.googleapis.com/token
-UPSTREAM_REVOKE_URL=https://oauth2.googleapis.com/revoke
-MCP_SERVER_URL=http://localhost:8010
-OAUTH_SCOPES="scope1 scope2"
-```
-
-For local development, add `http://localhost:<port>/oauth/callback` as an authorized redirect URI in your SaaS provider's OAuth app settings.
-
-## Testing
-
-```bash
-# Install test dependencies
-npm install @chainofagents/auth open
-
-# Run all tests
-npx tsx test-harness/server.test.ts --server http://localhost:8010/mcp
-
-# Run specific test suites
-npx tsx test-harness/server.test.ts --server http://localhost:8010/mcp --public
-npx tsx test-harness/server.test.ts --server http://localhost:8010/mcp --discovery
-npx tsx test-harness/server.test.ts --server http://localhost:8010/mcp --auth
-```
-
-## Deployment to Google Cloud
-
-MCP servers are deployed to Cloud Run behind a shared load balancer at `mcp.agentman.ai`.
-
-### URL Structure
-
-All MCP servers are accessible at:
-```
-https://mcp.agentman.ai/<your-path>/mcp
-```
-
-Examples:
-- Gmail: `https://mcp.agentman.ai/gmail/mcp`
-- Shopify: `https://mcp.agentman.ai/shopify/mcp`
-- QuickBooks: `https://mcp.agentman.ai/quickbooks/mcp`
-
-### Deploy Scripts
-
-1. **Configure** - Edit the configuration section in deploy scripts:
-   - `deploy-test.sh` - Test/staging environment
-   - `deploy-prod.sh` - Production environment
-
-2. **Deploy to Test** first:
-   ```bash
-   ./deploy-test.sh
-   ```
-
-3. **Test your deployment**:
-   ```bash
-   curl https://mcp.agentman.ai/your-path/health
-   ```
-
-4. **Deploy to Production**:
-   ```bash
-   ./deploy-prod.sh
-   ```
-
-See [docs/DEPLOY_TO_GCP.md](docs/DEPLOY_TO_GCP.md) for detailed deployment instructions.
-
-## MCP Best Practices
-
-This template follows MCP 2025-11-25 specification:
-
-- **Stateless HTTP** - No sessions, JSON responses
-- **Tool annotations** - readOnlyHint, destructiveHint, idempotentHint, openWorldHint
-- **Response format** - All tools support `response_format` parameter (markdown/json)
-- **Pagination** - Standardized limit/offset with metadata
-- **Character limit** - 25,000 char limit with automatic truncation
-- **Structured output** - outputSchema definitions for all tools
-- **Request correlation** - x-agentman-request-id header for tracing
-
-## Files Overview
-
-| File | Purpose |
-|------|---------|
-| `src/index.ts` | Entry point with transport switching |
-| `src/http-server.ts` | HTTP transport for production |
-| `src/tools/index.ts` | Tool definitions and handlers |
-| `src/config.ts` | Environment configuration |
-| `src/auth/oauth-metadata.ts` | OAuth well-known endpoints (RFC 8414/9728) |
-| `src/auth/oauth-server.ts` | OAuth broker routes (register, authorize, callback, token, revoke) |
-| `src/auth/pkce.ts` | PKCE S256 verification and token generation |
-| `test-harness/server.test.ts` | End-to-end test harness |
-| `Dockerfile` | Container build |
-| `cloudbuild.yaml` | Cloud Build configuration |
-| `deploy-test.sh` | Test environment deployment |
-| `deploy-prod.sh` | Production deployment |
-| `docs/DEPLOY_TO_GCP.md` | Detailed deployment guide |
+Strategy docs at: `/Users/prasadthammineni/chainofagents/agentman-agentwatch/docs/`
