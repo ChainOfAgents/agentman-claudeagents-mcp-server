@@ -1,7 +1,7 @@
 {
   "name": "@agentman/claudeagents-mcp-server",
   "version": "0.1.0",
-  "description": "MCP server for Claude Managed Agents — promptable agent management from any MCP client (claude.ai, Claude Desktop, Cursor, etc.)",
+  "description": "MCP server for Claude Managed Agents \u2014 promptable agent management from any MCP client (claude.ai, Claude Desktop, Cursor, etc.)",
   "type": "module",
   "main": "dist/http-server.js",
   "bin": {
@@ -47,10 +47,10 @@
     "node": ">=20.0.0"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.12.0",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "cors": "^2.8.5",
-    "express": "^4.21.0",
-    "express-rate-limit": "^7.4.0",
+    "express": "^4.21.2",
+    "express-rate-limit": "^7.5.0",
     "yaml": "^2.5.0",
     "zod": "^3.23.0"
   },
@@ -61,5 +61,16 @@
     "eslint": "^9.0.0",
     "tsx": "^4.19.0",
     "typescript": "^5.6.0"
+  },
+  "overrides": {
+    "fast-uri": "^3.1.2",
+    "flatted": "^3.4.2",
+    "minimatch": "^9.0.7",
+    "path-to-regexp": "^8.4.0",
+    "@hono/node-server": "^1.19.13",
+    "ajv": "^8.20.0",
+    "body-parser": "^1.20.5",
+    "brace-expansion": "^1.1.13",
+    "qs": "^6.14.2"
   }
 }
