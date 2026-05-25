@@ -10,10 +10,32 @@
  */
 
 import { Router, Request, Response } from "express";
+import rateLimit from "express-rate-limit";
 import { config } from "../config.js";
 import { logger } from "../utils/logger.js";
 
 const router = Router();
+
+// Rate-limit OAuth discovery endpoints. These are public (no auth) and only
+// return static metadata, but they're still abuse vectors:
+//   - Cheap to call, expensive to serve at scale.
+//   - Common scanner target since they reveal OAuth endpoints.
+// Limits are intentionally generous so well-behaved Claude/Agentman clients
+// (which fetch each .well-known path at most once per session) are never affected.
+// Per-IP, in-process limiter — sufficient for a single-instance MCP server.
+// Behind a load balancer, configure trustProxy at the express app level.
+const metadataLimiter = rateLimit({
+  windowMs: 60_000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    error: "rate_limit_exceeded",
+    message: "Too many OAuth metadata requests, please try again later",
+  },
+  validate: { trustProxy: false },
+});
+router.use(metadataLimiter);
 
 // =============================================================================
 // Types
