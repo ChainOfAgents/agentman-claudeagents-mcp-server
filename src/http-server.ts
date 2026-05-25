@@ -88,7 +88,10 @@ app.use(
 app.use(requestIdMiddleware);
 
 // =============================================================================
-// OAuth Metadata Routes (must be before rate limiting)
+// OAuth Metadata Routes
+// Mounted before the global limiter; the router applies its own metadata-specific
+// limiter (see src/auth/oauth-metadata.ts) so discovery requests don't share a
+// bucket with the authenticated API traffic.
 // =============================================================================
 
 app.use(oauthMetadataRouter);
