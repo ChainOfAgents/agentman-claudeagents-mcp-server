@@ -20,6 +20,8 @@ export {
   SessionIdSchema,
   ThreadIdSchema,
   ToolUseIdSchema,
+  VaultIdSchema,
+  CredentialIdSchema,
   // Pagination
   AnthropicPaginationSchema,
   type AnthropicPaginationParams,

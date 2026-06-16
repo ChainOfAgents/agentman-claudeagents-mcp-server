@@ -188,3 +188,37 @@ export interface SessionThread {
   status: SessionStatus;
   created_at: string;
 }
+
+// =============================================================================
+// Vaults & Credentials (MCP credential store)
+// =============================================================================
+
+/**
+ * A vault — a workspace-scoped collection of MCP credentials, typically one
+ * per end user or per deal. Referenced by `vault_ids` at session creation.
+ */
+export interface Vault {
+  type: "vault";
+  id: string;
+  display_name: string;
+  metadata?: Record<string, string>;
+  created_at: string;
+  updated_at: string;
+  archived_at: string | null;
+}
+
+/**
+ * A credential inside a vault, bound to a single MCP server URL. Secret
+ * fields (token / access_token / refresh_token / client_secret) are
+ * write-only and never returned by the API.
+ */
+export interface Credential {
+  type: "vault_credential";
+  id: string;
+  vault_id?: string;
+  display_name: string;
+  auth?: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+  archived_at: string | null;
+}
