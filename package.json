@@ -66,7 +66,6 @@
     "fast-uri": "^3.1.2",
     "flatted": "^3.4.2",
     "minimatch": "^9.0.7",
-    "path-to-regexp": "^8.4.0",
     "@hono/node-server": "^1.19.13",
     "ajv": "^8.20.0",
     "body-parser": "^1.20.5",
