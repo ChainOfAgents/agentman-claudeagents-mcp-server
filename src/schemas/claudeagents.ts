@@ -143,8 +143,17 @@ export const ToolConfigSchema = z
 export const McpServerConfigSchema = z
   .object({
     name: z.string(),
-    type: z.enum(["http", "sse", "stdio"]).optional(),
+    // Anthropic's Managed Agents API only accepts `type: "url"` for remote MCP
+    // servers. We still accept the older "http"/"sse"/"stdio" values callers
+    // may pass, but normalizeMcpServers() (in tools/claudeagents/agents.ts)
+    // rewrites them to "url" before the payload reaches Anthropic.
+    type: z.enum(["url", "http", "sse", "stdio"]).optional(),
     url: z.string().url().optional(),
+    // NOTE: custom headers are NOT supported by the Managed Agents API — it
+    // rejects them with `400: mcp_servers.0.headers: Extra inputs are not
+    // permitted`. Accepted here for backward compatibility but stripped before
+    // the API call. To authenticate an MCP server, use a credential vault
+    // (vault_ids on session create) instead.
     headers: z.record(z.string(), z.string()).optional(),
   })
   .passthrough()
