@@ -44,6 +44,41 @@ import {
 } from "../shared.js";
 
 // =============================================================================
+// Payload normalization
+// =============================================================================
+
+/**
+ * Coerce `mcp_servers` entries into the shape Anthropic's Managed Agents API
+ * accepts before they go on the wire.
+ *
+ * The API requires `type: "url"` for remote MCP servers (it rejects "http" with
+ * `400: "http" is not a valid value`) and rejects a `headers` field entirely
+ * (`400: mcp_servers.0.headers: Extra inputs are not permitted`). Callers and
+ * our own schema historically allowed "http"/"sse"/"stdio" and a headers map,
+ * so without this rewrite no MCP-backed agent could ever be created.
+ * See BUG-CLAUDEMCP-001.
+ *
+ * To authenticate an MCP server, attach a credential vault at session creation
+ * (`vault_ids`) — that is the supported channel, not request headers.
+ */
+function normalizeMcpServers<T extends Record<string, unknown>>(body: T): T {
+  const servers = (body as { mcp_servers?: unknown }).mcp_servers;
+  if (!Array.isArray(servers)) return body;
+
+  const normalized = servers.map((server) => {
+    if (server === null || typeof server !== "object") return server;
+    // Drop `headers` (unsupported) and force `type: "url"` for remote servers.
+    const { headers: _headers, type: _type, ...rest } = server as Record<
+      string,
+      unknown
+    >;
+    return { ...rest, type: "url" };
+  });
+
+  return { ...body, mcp_servers: normalized };
+}
+
+// =============================================================================
 // Input schemas
 // =============================================================================
 
@@ -339,7 +374,7 @@ Error Handling:
         const created = await apiPost<Agent>(
           getAccessToken()!,
           "/v1/agents",
-          body
+          normalizeMcpServers(body)
         );
         return createSuccessResponse(
           {
@@ -407,7 +442,7 @@ Error Handling:
         const updated = await apiPost<Agent>(
           getAccessToken()!,
           `/v1/agents/${encodeURIComponent(agent_id)}`,
-          body
+          normalizeMcpServers(body)
         );
         return createSuccessResponse(
           {
