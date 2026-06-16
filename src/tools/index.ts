@@ -4,7 +4,9 @@
  * This module wires up all tools across 7 category modules. It's called
  * once at server init from src/index.ts (stdio) and src/http-server.ts (HTTP).
  *
- * Tool catalog (33 tools in v0.1):
+ * Tool catalog (40 tools):
+ *   Vaults (7):            create_vault, list_vaults, get_vault, delete_vault,
+ *                          create_credential, list_credentials, delete_credential
  *   Templates (2):         list_templates, get_template
  *   Agents (6):            list, get, list_versions, create, update, archive
  *   Environments (6):      list, get, create, update, archive, delete
@@ -26,6 +28,7 @@ import { registerSessionTools } from "./claudeagents/sessions.js";
 import { registerSmartTools } from "./claudeagents/smart.js";
 import { registerStreamingTools } from "./claudeagents/streaming.js";
 import { registerTemplateTools } from "./claudeagents/templates.js";
+import { registerVaultTools } from "./claudeagents/vaults.js";
 
 /**
  * Register all claudeagents-mcp tools with the MCP server.
@@ -50,4 +53,5 @@ export function registerTools(
   registerObservationTools(server, getAccessToken);
   registerStreamingTools(server, getAccessToken);
   registerSmartTools(server, getAccessToken);
+  registerVaultTools(server, getAccessToken);
 }

@@ -65,6 +65,26 @@ export const ToolUseIdSchema = z
   .max(100, "tool_use_id too long")
   .describe("Tool use ID from an agent.tool_use event");
 
+/**
+ * Vault ID — a collection of MCP credentials.
+ * Format: "vlt_..."
+ */
+export const VaultIdSchema = z
+  .string()
+  .min(1, "vault_id is required")
+  .max(100, "vault_id too long")
+  .describe("Vault ID, e.g., 'vlt_01ab...'");
+
+/**
+ * Credential ID — a single secret inside a vault.
+ * Format: "vcrd_..."
+ */
+export const CredentialIdSchema = z
+  .string()
+  .min(1, "credential_id is required")
+  .max(100, "credential_id too long")
+  .describe("Credential ID, e.g., 'vcrd_01ab...'");
+
 // =============================================================================
 // Pagination (Anthropic-specific — uses opaque cursor strings, not offset)
 // =============================================================================
